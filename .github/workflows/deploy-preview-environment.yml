@@ -1,0 +1,94 @@
+name: Deploy Preview Environment
+
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+    branches:
+      - feat/*
+  push:
+    branches:
+      - feat/*
+
+jobs:
+  build-image:
+    name: Build Image
+    runs-on: ubuntu-20.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2.3.4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-central-1
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: Build, tag, and push image to Amazon ECR
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.eu-central-1.amazonaws.com
+          ECR_REPOSITORY: prev-application
+        run: |
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }} .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }}
+
+  deploy:
+    name: Deploy to AWS
+    runs-on: ubuntu-20.04
+    needs:
+      - build-image
+    steps:
+      - name: Disallow Concurrent Runs
+        uses: byu-oit/github-action-disallow-concurrent-runs@v2
+        with:
+          token: ${{ github.token }}
+
+      - name: Checkout
+        uses: actions/checkout@v2.3.4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-central-1
+
+      - name: Extract branch name
+        shell: bash
+        run: echo "##[set-output name=branch;]$(echo ${GITHUB_REF#refs/heads/feat/})"
+        id: extract_branch
+
+      - name: Update Image Version in Stack
+        id: update-stack
+        run: |
+          wget https://github.com/mikefarah/yq/releases/download/v4.6.1/yq_linux_amd64.tar.gz -O - | tar xz && sudo mv yq_linux_amd64 /usr/bin/yq
+          yq e '.Resources.ApplicationTaskDefinition.Properties.ContainerDefinitions[0].Image = "${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.eu-central-1.amazonaws.com/prev-application:${{ github.sha }}"' -i deployments/stack.yml
+
+      - name: Deploy AWS Stack
+        id: backend-stack
+        uses: aws-actions/aws-cloudformation-github-deploy@v1
+        with:
+          name: ${{ steps.extract_branch.outputs.branch }}-Application
+          template: deployments/stack.yml
+          no-fail-on-empty-changeset: "1"
+          capabilities: CAPABILITY_NAMED_IAM,CAPABILITY_IAM
+          parameter-overrides: "Namespace=${{ steps.extract_branch.outputs.branch }},ClusterArn=${{ secrets.CLUSTER_ARN }},AccountId=${{ secrets.AWS_ACCOUNT_ID }}"
+
+      - name: Add PR Comment
+        uses: mshick/add-pr-comment@v1
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          repo-token-user-login: 'github-actions[bot]'
+          message: |
+            I created a new preview environment at ${{ steps.backend-stack.outputs.DeploymentUrl }}
+
+    outputs:
+      DeploymentUrl: ${{ steps.backend-stack.outputs.DeploymentUrl }}
