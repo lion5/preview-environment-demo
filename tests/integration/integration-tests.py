@@ -1,7 +1,9 @@
+import pprint
+
 import requests
 import sys
 
-EXPECTED_RESPONSE = "Hello World!"
+EXPECTED_RESPONSE = "Hello World!\n"
 
 
 def check_response(url):
