@@ -92,3 +92,19 @@ jobs:
 
     outputs:
       DeploymentUrl: ${{ steps.backend-stack.outputs.DeploymentUrl }}
+
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-20.04
+    needs:
+      - deploy
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2.3.4
+
+      - name: Verify Integration Test Results
+        run: |
+          sleep 60 # wait for
+          pip install -r tests/integration/requirements.txt
+          python tests/integration/integration-tests.py ${{ needs.deploy.outputs.DeploymentUrl }}
